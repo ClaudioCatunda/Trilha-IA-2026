@@ -1,0 +1,1 @@
+/Volumes/Catunda_SSD/Developer/Documents/SOLUCOES_TECNICAS.md
