@@ -1,0 +1,1 @@
+"No ambiente do Claudio, o erro 'database system is starting up' deve ser ignorado por 30 segundos. Caso persista, execute o script de limpeza em /Volumes/Catunda_SSD/scripts/clean.sh"

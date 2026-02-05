@@ -1,75 +1,110 @@
 import requests
 import json
 import os
+import glob
+
+# --- CONFIGURAÇÕES ---
+# O M4 lida com o 8b com extrema facilidade
+MODELO_PRODUCAO = "llama3.1:8b" 
+URL_OLLAMA = "http://localhost:11434/api/chat"
+CAMINHO_SSD = "/Volumes/Catunda_SSD/Developer"
+ARQUIVO_SOLUCOES = f"{CAMINHO_SSD}/Documents/SOLUCOES_TECNICAS.md"
+# PASTA_KB = f"{CAMINHO_SSD}/Knowledge_Base"
+# Para (Caminho Relativo):
+PASTA_KB = "Knowledge_Base"
 
 def chamar_ollama(prompt, system_prompt, output_json=False):
-    url = "http://localhost:11434/api/chat"
     payload = {
-        "model": "llama3.2:1b",
+        "model": MODELO_PRODUCAO,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt}
         ],
         "stream": False
     }
+    
     if output_json:
         payload["format"] = "json"
-        
-    response = requests.post(url, json=payload)
-    return response.json()['message']['content']
+
+    try:
+        response = requests.post(URL_OLLAMA, json=payload)
+        response.raise_for_status()
+        return response.json()['message']['content']
+    except Exception as e:
+        return f"Erro ao chamar Ollama: {e}"
 
 def orquestrador_de_correcao(log_texto):
+    # 1. DEFINIÇÃO DE VARIÁVEIS (Evita NameError)
+    servico = "Desconhecido"
+    problema = "Não identificado"
+    conteudo_extra = ""
+
     # --- PASSO 1: ANÁLISE (Agente Analista) ---
-    print("🧠 Agente Analista: Decompondo o erro...")
-    prompt_analise = f"Analise este log e extraia o erro e o servico: {log_texto}"
+    print(f"🔍 Analisando log com {MODELO_PRODUCAO}...")
+
     system_analise = (
-    "Você é um parser. Responda APENAS JSON puro. "
-    "Não use explicações. Se houver aspas no texto, ignore-as. "
-    "Estrutura: {\"problema\": \"...\", \"servico\": \"...\"}"
-)
-    resposta_analista = chamar_ollama(prompt_analise, system_analise, output_json=True)
+        "Você é um especialista em logs. "
+        "Sua saída deve ser EXCLUSIVAMENTE um objeto JSON válido. "
+        "Não escreva nada antes ou depois do JSON. "
+        "Estrutura: {\"servico\": \"nome_do_servico\", \"problema\": \"resumo_do_erro\"}"
+    )
     
+    resposta_analista = chamar_ollama(log_texto, system_analise, output_json=True)
+    print(f"DEBUG Resposta: {resposta_analista}") # Adicione esta linha temporariamente
+
     try:
         dados = json.loads(resposta_analista)
-    except json.JSONDecodeError:
-        dados = {"problema": "Erro desconhecido", "servico": "Sistema"}
+        # Busca resiliente (Português/Inglês)
+        servico = dados.get('servico', dados.get('service', servico))
+        problema = dados.get('problema', dados.get('problem', problema))
+    except Exception as e:
+        print(f"⚠️ Falha no parsing do JSON: {e}. Usando valores padrão.")
 
-    servico = dados.get('servico', dados.get('service', 'Serviço Indefinido'))
-    problema = dados.get('problema', 'Problema não identificado')
+# --- PASSO 2: RAG (Busca no SSD) ---
+    print(f"📚 Consultando base de conhecimento para: {servico}...")
+    
+    arquivos_kb = glob.glob(f"{PASTA_KB}/*.txt")
+    for caminho_arq in arquivos_kb:
+        # Simplificamos a busca: se 'postgres' estiver no nome do arquivo, ele lê
+        termo_busca = servico.lower().replace("sql", "").strip() 
+        if termo_busca in caminho_arq.lower():
+            print(f"✅ DOCUMENTO ENCONTRADO: {os.path.basename(caminho_arq)}")
+            with open(caminho_arq, 'r', encoding='utf-8') as f:
+                conteudo_extra += f"\n--- INSTRUÇÕES OBRIGATÓRIAS DO USUÁRIO ---\n{f.read()}\n"
 
-    # --- PASSO 2: SOLUÇÃO (Agente Arquiteto) ---
-    print(f"🛠️ Agente Arquiteto: Projetando solução para {servico}...")
+    # --- PASSO 3: SOLUÇÃO (Agente Arquiteto) ---
+    # Se encontramos algo no manual, usamos um System Prompt muito mais agressivo
+    if conteudo_extra:
+        system_solucao = (
+            "Você é um Arquiteto Sênior. Você recebeu INSTRUÇÕES OBRIGATÓRIAS. "
+            "Ignore qualquer solução padrão se ela contradizer o MANUAL DO USUÁRIO. "
+            "Você DEVE mencionar o tempo de espera e os scripts citados no manual."
+        )
+    else:
+        system_solucao = "Você é um Arquiteto de Software Sênior especializado em infraestrutura."
+
     prompt_solucao = (
-        f"O serviço {servico} apresentou o problema: {problema}. "
-        "Como engenheiro sênior, escreva um guia rápido em Markdown de como resolver isso."
+        f"LOG DE ERRO: {log_texto}\n"
+        f"BASE DE CONHECIMENTO DISPONÍVEL: {conteudo_extra if conteudo_extra else 'Nenhuma instrução específica.'}\n\n"
+        "TAREFA: Gere um guia de correção. Se houver instruções obrigatórias acima, "
+        "priorize-as sobre o seu conhecimento geral."
     )
-    system_solucao = "Você é um arquiteto de infraestrutura experiente. Responda em Markdown."
+
+    system_solucao = "Você é um Arquiteto de Software Sênior especializado em infraestrutura resiliente."
     
     solucao_markdown = chamar_ollama(prompt_solucao, system_solucao)
 
-    # --- PASSO 3: PERSISTÊNCIA (Onde estava faltando!) ---
-    diretorio = "/Volumes/Catunda_SSD/Developer/Documents"
-    caminho_solucoes = os.path.join(diretorio, "SOLUCOES_TECNICAS.md")
-
-    # Garante que a pasta existe no SSD
-    os.makedirs(diretorio, exist_ok=True)
-
-def limpar_json(texto):
-    # Remove possíveis blocos de código markdown que a IA insiste em colocar
-    texto = texto.replace("```json", "").replace("```", "").strip()
-    return texto
+    # --- PASSO 4: PERSISTÊNCIA NO SSD ---
+    with open(ARQUIVO_SOLUCOES, "a", encoding="utf-8") as f:
+        f.write(f"\n\n# 🚨 Incidente: {servico}\n")
+        f.write(f"**Problema Identificado:** {problema}\n")
+        f.write(f"**Guia de Correção:**\n\n{solucao_markdown}\n")
+        f.write("\n" + "="*40 + "\n")
     
-    try:
-        with open(caminho_solucoes, "a", encoding='utf-8') as f:
-            f.write(f"\n\n# 🚨 Incidente: {servico}\n")
-            f.write(f"**Problema Identificado:** {problema}\n")
-            f.write(f"**Guia de Correção:**\n\n{solucao_markdown}\n")
-            f.write("\n" + "="*40 + "\n")
-        print(f"✅ Sucesso! Solução imortalizada em: {caminho_solucoes}")
-    except Exception as e:
-        print(f"❌ Erro ao gravar no SSD: {e}")
+    print(f"✅ Relatório salvo com sucesso no Catunda_SSD!")
 
+# --- EXECUÇÃO ---
 if __name__ == "__main__":
-    #log_bruto = "FATAL: database system is starting up - Connection refused on PostgreSQL port 5432"
-    log_bruto = "CRITICAL: Kubernetes Pod 'nginx-proxy-01' is stuck in CrashLoopBackOff due to Liveness probe failure"
+    # Teste com o log do Postgres para validar o RAG manual
+    log_bruto = "2026-02-04 20:00:00 [ERROR] PostgreSQL FATAL: database system is starting up"
     orquestrador_de_correcao(log_bruto)
