@@ -1,0 +1,2 @@
+meta_lucro: 9000
+alerta_inadimplencia: 5.0
