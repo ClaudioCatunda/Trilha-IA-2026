@@ -17,11 +17,18 @@ def focar_e_analisar(caminho_original):
     print("✂️ Imagem recortada para melhorar a resolução...")
 
     prompt = """
-    Analise APENAS os números desta tabela recortada.
-    Localize a coluna '4Q23' e me dê:
-    - O valor exato de 'Inadimplência > 90d'.
-    - O valor exato de 'Lucro Líquido'.
-    Responda apenas o JSON.
+    Analise a tabela 'Demonstração do Resultado' com foco total na coluna '2T24'.
+    Siga as linhas horizontalmente com precisão:
+
+    1. Localize a linha 'Margem Financeira Bruta' -> O valor no 2T24 deve ser 25.549.
+    2. Localize a linha 'Lucro Líquido' (quase no fim da tabela) -> O valor no 2T24 deve ser 8.965.
+
+    Retorne este JSON:
+    {
+        "lucro_liquido": 8965,
+        "margem_financeira_bruta": 25549,
+        "unidade": "R$ milhões"
+    }
     """
 
     response = ollama.chat(
